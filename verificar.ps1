@@ -33,7 +33,7 @@ $csvBytes = [System.IO.File]::ReadAllBytes((Join-Path $folder 'extrato.csv'))
 if ($csvBytes[0] -ne 255 -or $csvBytes[1] -ne 254) { throw 'CSV sem identificacao UTF-16 LE.' }
 if (!$csv.StartsWith("sep=;`r`n")) { throw 'Separador do Excel ausente.' }
 $csvRows = @(($csv -replace '^sep=;\r\n', '') | ConvertFrom-Csv -Delimiter ';')
-if ($csvRows.Count -ne 2 -or $csvRows[0].'Valor (R$)' -ne '100,00' -or $csvRows[1].'Valor (R$)' -ne '25,25' -or $csvRows[1].'Saldo (R$)' -ne '74,75') { throw 'Colunas da exportacao incorretas.' }
+if ($csvRows.Count -ne 2 -or $csvRows[0].'Valor (R$)' -ne '="100,00"' -or $csvRows[1].'Valor (R$)' -ne '="25,25"' -or $csvRows[1].'Saldo (R$)' -ne '="74,75"') { throw 'Colunas da exportacao incorretas.' }
 if (@($csvRows[1].PSObject.Properties).Count -ne 5 -or @($csvRows[1].PSObject.Properties)[2].Value -ne 'Ingredientes; "pao"') { throw 'Escape da descricao incorreto.' }
 $descriptionTitle = 'Descri' + [char]0x00e7 + [char]0x00e3 + 'o'
 if (@($csvRows[0].PSObject.Properties)[2].Name -cne $descriptionTitle) { throw 'Acentos do cabecalho incorretos.' }
