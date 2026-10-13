@@ -1,4 +1,6 @@
 tools/
-test-data/
 movimentacoes.dat*
 extrato.csv
+.env
+.env.*
+extrato.xml

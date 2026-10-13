@@ -10,14 +10,18 @@
 #include <stdexcept>
 #include <codecvt>
 #include <locale>
+#include <algorithm>
 #ifdef _WIN32
 #include <windows.h>
 #else
 #include <unistd.h>
+#include <signal.h>
+#include <termios.h>
 #endif
 using Money = std::int64_t;
 constexpr Money LIMIT = 1000000000000LL;
 struct Entry { std::string date, type, description; Money value; };
+#include "supabase.hpp"
 const char* color(bool terminal, const char* code) { return terminal ? code : ""; }
 constexpr const char* GREEN = "\033[1;32m";
 constexpr const char* RED = "\033[1;31m";
@@ -56,17 +60,27 @@ std::string input(const std::string& prompt) {
     if (!s.empty() && s.back() == '\r') s.pop_back();
     return s;
 }
-void save(const std::filesystem::path& file, const std::vector<Entry>& entries) {
-    auto temporary = file; temporary += ".tmp";
-    std::ofstream out(temporary, std::ios::trunc);
-    if (!out) throw std::runtime_error("Nao foi possivel salvar os dados.");
-    for (const auto& e : entries) out << std::quoted(e.date) << ' ' << std::quoted(e.type) << ' ' << e.value << ' ' << std::quoted(e.description) << '\n';
-    out.flush(); if (!out) throw std::runtime_error("Falha ao gravar os dados."); out.close();
+std::string passwordInput() {
+    std::cout << "  Digite sua senha: " << std::flush;
 #ifdef _WIN32
-    if (!MoveFileExW(temporary.c_str(), file.c_str(), MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH)) throw std::runtime_error("Falha ao substituir arquivo de dados.");
+    HANDLE handle = GetStdHandle(STD_INPUT_HANDLE);
+    DWORD previous;
+    if (!GetConsoleMode(handle, &previous) || !SetConsoleMode(handle, previous & ~ENABLE_ECHO_INPUT))
+        throw std::runtime_error("Use iniciar.ps1 para informar a senha sem exibi-la.");
+    std::string value; bool success = static_cast<bool>(std::getline(std::cin, value));
+    SetConsoleMode(handle, previous);
 #else
-    std::filesystem::rename(temporary, file);
+    termios previous{};
+    if (tcgetattr(STDIN_FILENO, &previous)) throw std::runtime_error("Defina SUPABASE_PASSWORD antes de iniciar.");
+    auto hidden = previous; hidden.c_lflag &= ~ECHO;
+    if (tcsetattr(STDIN_FILENO, TCSAFLUSH, &hidden)) throw std::runtime_error("Nao foi possivel ocultar a senha.");
+    std::string value; bool success = static_cast<bool>(std::getline(std::cin, value));
+    tcsetattr(STDIN_FILENO, TCSAFLUSH, &previous);
 #endif
+    std::cout << '\n';
+    if (!value.empty() && value.back() == '\r') value.pop_back();
+    if (!success || value.empty()) throw std::runtime_error("Senha obrigatoria.");
+    return value;
 }
 std::string xmlEscape(const std::string& text) {
     std::string result;
@@ -116,7 +130,7 @@ void exportSpreadsheet(const std::filesystem::path& file, const std::vector<Entr
     out << "</Table></Worksheet></Workbook>";
     out.flush(); if (!out) throw std::runtime_error("Falha ao exportar planilha XML.");
 }
-void deleteHistory(const std::filesystem::path& file, std::vector<Entry>& entries, bool terminal) {
+void deleteHistory(Supabase& database, const std::filesystem::path& folder, std::vector<Entry>& entries, bool terminal) {
     if (terminal) std::cout << "\033[1;31m";
     std::cout << "\n  Você tem certeza que deseja deletar? Esse ato não pode ser revertido. (s/n): ";
     if (terminal) std::cout << "\033[0m";
@@ -124,15 +138,15 @@ void deleteHistory(const std::filesystem::path& file, std::vector<Entry>& entrie
         std::cout << "  Exclusao cancelada.\n";
         return;
     }
-    if (input("  Senha: ") != "1234") {
-        std::cout << "  Senha incorreta. Exclusao cancelada.\n";
+    if (input("  Digite APAGAR para confirmar a exclusao do historico: ") != "APAGAR") {
+        std::cout << "  Confirmacao incorreta. Exclusao cancelada.\n";
         return;
     }
-    save(file, {});
+    database.clear();
     entries.clear();
     for (const auto& name : {"extrato.csv", "extrato.xml"}) {
         std::error_code error;
-        std::filesystem::remove(file.parent_path() / name, error);
+        std::filesystem::remove(folder / name, error);
         if (error) std::cout << "  Historico apagado, mas nao foi possivel excluir " << name
                              << ". Feche o arquivo no Excel e repita a exclusao.\n";
     }
@@ -144,25 +158,33 @@ int main(int argc, char** argv) {
     bool terminal = GetFileType(GetStdHandle(STD_OUTPUT_HANDLE)) == FILE_TYPE_CHAR;
     DWORD mode; if (GetConsoleMode(GetStdHandle(STD_OUTPUT_HANDLE), &mode)) SetConsoleMode(GetStdHandle(STD_OUTPUT_HANDLE), mode | ENABLE_VIRTUAL_TERMINAL_PROCESSING);
 #else
+    signal(SIGPIPE, SIG_IGN);
     bool terminal = isatty(STDOUT_FILENO);
 #endif
     try {
-        auto folder = std::filesystem::absolute(argv[0]).parent_path();
+        auto executableFolder = std::filesystem::absolute(argv[0]).parent_path();
+        auto folder = executableFolder;
         if (argc == 3 && std::string(argv[1]) == "--dados") folder = std::filesystem::absolute(argv[2]);
+        else if (argc != 1) throw std::runtime_error("Uso: programa [--dados pasta-dos-extratos].");
         std::filesystem::create_directories(folder);
-        auto file = folder / "movimentacoes.dat";
-        std::vector<Entry> entries;
-        if (std::filesystem::exists(file)) {
-            std::ifstream in(file); if (!in) throw std::runtime_error("Nao foi possivel abrir os dados.");
-            std::string line;
-            while (std::getline(in, line)) {
-                Entry e; std::istringstream row(line);
-                if (!(row >> std::quoted(e.date) >> std::quoted(e.type) >> e.value >> std::quoted(e.description)) || (e.type != "ENTRADA" && e.type != "SAIDA") || e.value <= 0 || e.value > LIMIT) throw std::runtime_error("Arquivo de dados invalido. Preserve o arquivo para recuperacao.");
-                row >> std::ws; if (!row.eof()) throw std::runtime_error("Arquivo de dados invalido.");
-                entries.push_back(e);
-            }
+        if (terminal && (!std::getenv("SUPABASE_PASSWORD") || !*std::getenv("SUPABASE_PASSWORD"))) {
+            auto password = passwordInput();
+#ifdef _WIN32
+            _putenv_s("SUPABASE_PASSWORD", password.c_str());
+#else
+            setenv("SUPABASE_PASSWORD", password.c_str(), 1);
+#endif
+            std::fill(password.begin(), password.end(), '\0');
         }
+        Supabase database(executableFolder);
+#ifdef _WIN32
+        _putenv_s("SUPABASE_PASSWORD", "");
+#else
+        unsetenv("SUPABASE_PASSWORD");
+#endif
+        std::vector<Entry> entries;
         for (;;) {
+            entries = database.load();
             Money incoming = 0, outgoing = 0;
             for (const auto& e : entries) { auto& total = e.type == "ENTRADA" ? incoming : outgoing; if (total > LIMIT - e.value) throw std::runtime_error("Limite financeiro excedido."); total += e.value; }
             if (terminal) std::cout << "\033[2J\033[H\033[38;5;214m";
@@ -187,16 +209,19 @@ int main(int argc, char** argv) {
                 Money value = 0;
                 if (!parseMoney(input("  Valor em R$: "), value)) { std::cout << "  Valor invalido. Use um numero positivo com ate 2 casas decimais.\n"; input("  Enter para continuar..."); continue; }
                 if ((choice == "1" ? incoming : outgoing) > LIMIT - value) { std::cout << "  Limite financeiro excedido.\n"; input("  Enter para continuar..."); continue; }
+                bool allowNegative = false;
                 if (choice == "2" && value > incoming - outgoing) {
                     if (input("  Esta saida deixara saldo negativo. Confirmar? (s/n): ") != "s") continue;
+                    allowNegative = true;
                 }
                 std::cout << color(terminal, choice == "1" ? GREEN : RED);
                 auto confirmation = input("  Confirmar " + currency(value) + "? (s/n): ");
                 std::cout << color(terminal, RESET);
                 if (confirmation != "s") continue;
-                auto updated = entries; updated.push_back({today(), choice == "1" ? "ENTRADA" : "SAIDA", description, value});
-                save(file, updated); entries.swap(updated); std::cout << "  Movimentacao salva!\n";
+                database.add({today(), choice == "1" ? "ENTRADA" : "SAIDA", description, value}, allowNegative);
+                std::cout << "  Movimentacao salva!\n";
             } else if (choice == "3") {
+                entries = database.load();
                 Money balance = 0;
                 std::cout << "\n  EXTRATO COMPLETO\n";
                 if (entries.empty()) std::cout << "  Nenhuma movimentacao registrada.\n";
@@ -208,6 +233,7 @@ int main(int argc, char** argv) {
                               << color(terminal, RESET) << " | Saldo: " << currency(balance) << '\n';
                 }
             } else if (choice == "4") {
+                entries = database.load();
                 auto csv = folder / "extrato.csv";
                 std::ostringstream out;
                 out << "sep=;\r\nData;Tipo;Descrição;Valor (R$);Saldo (R$)\r\n";
@@ -215,7 +241,6 @@ int main(int argc, char** argv) {
                 for (const auto& e : entries) {
                     balance += e.type == "ENTRADA" ? e.value : -e.value;
                     std::string escaped; for (char c : e.description) { escaped += c; if (c == '"') escaped += '"'; }
-                    // Prevent spreadsheet formulas in user-entered descriptions.
                     if (!escaped.empty() && std::string("=+-@").find(escaped[0]) != std::string::npos) escaped.insert(0, "'");
                     out << e.date << ';' << e.type << ";\"" << escaped << "\";" << decimalMoney(e.value) << ';' << decimalMoney(balance) << "\r\n";
                 }
@@ -230,11 +255,11 @@ int main(int argc, char** argv) {
                 std::cout << "  Exportado: " << csv.string() << '\n';
                 std::cout << "  Planilha com colunas ajustadas: " << spreadsheet.string() << '\n';
             } else if (choice == "5") {
-                deleteHistory(file, entries, terminal);
+                deleteHistory(database, folder, entries, terminal);
             } else std::cout << "  Opcao invalida.\n";
             input("  Enter para continuar...");
         }
-        std::cout << "\n  Dados salvos. Ate logo!\n";
+        std::cout << "\n  Ate logo!\n";
         return 0;
     } catch (const std::exception& e) { std::cerr << "\n  " << e.what() << '\n'; return 1; }
 }
