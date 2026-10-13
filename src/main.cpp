@@ -103,8 +103,8 @@ void exportSpreadsheet(const std::filesystem::path& file, const std::vector<Entr
            "<Style ss:ID=\"Money\"><NumberFormat ss:Format=\"0.00\"/></Style>"
            "<Style ss:ID=\"Incoming\" ss:Parent=\"Text\"><Font ss:Color=\"#008000\"/></Style>"
            "<Style ss:ID=\"Outgoing\" ss:Parent=\"Text\"><Font ss:Color=\"#C00000\"/></Style>"
-           "<Style ss:ID=\"IncomingMoney\" ss:Parent=\"Money\"><Font ss:Color=\"#008000\"/></Style>"
-           "<Style ss:ID=\"OutgoingMoney\" ss:Parent=\"Money\"><Font ss:Color=\"#C00000\"/></Style></Styles>"
+           "<Style ss:ID=\"IncomingMoney\" ss:Parent=\"Money\"><NumberFormat ss:Format=\"0.00\"/><Font ss:Color=\"#008000\"/></Style>"
+           "<Style ss:ID=\"OutgoingMoney\" ss:Parent=\"Money\"><NumberFormat ss:Format=\"0.00\"/><Font ss:Color=\"#C00000\"/></Style></Styles>"
            "<Worksheet ss:Name=\"Extrato\"><Table>"
            "<Column ss:Width=\"125\"/><Column ss:Width=\"75\"/><Column ss:Width=\"300\"/>"
            "<Column ss:Width=\"110\"/><Column ss:Width=\"110\"/><Row ss:StyleID=\"Header\">";
@@ -242,7 +242,9 @@ int main(int argc, char** argv) {
                     balance += e.type == "ENTRADA" ? e.value : -e.value;
                     std::string escaped; for (char c : e.description) { escaped += c; if (c == '"') escaped += '"'; }
                     if (!escaped.empty() && std::string("=+-@").find(escaped[0]) != std::string::npos) escaped.insert(0, "'");
-                    out << e.date << ';' << e.type << ";\"" << escaped << "\";" << decimalMoney(e.value) << ';' << decimalMoney(balance) << "\r\n";
+                    // CSV has no cell formatting. Return fixed decimal strings so Excel keeps trailing zeroes.
+                    out << e.date << ';' << e.type << ";\"" << escaped << "\";=\"" << decimalMoney(e.value)
+                        << "\";=\"" << decimalMoney(balance) << "\"\r\n";
                 }
                 std::wstring_convert<std::codecvt_utf8_utf16<char16_t>, char16_t> converter;
                 auto encoded = converter.from_bytes(out.str());
