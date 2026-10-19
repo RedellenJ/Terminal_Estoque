@@ -1,0 +1,96 @@
+@startuml
+!pragma layout smetana
+title Doc'<U+00EA> Hamburgueria\nDiagrama de classes e depend<U+00EA>ncias
+left to right direction
+skinparam backgroundColor #F8FAFC
+skinparam shadowing false
+skinparam roundcorner 12
+skinparam defaultFontName SansSerif
+skinparam ArrowColor #475569
+skinparam classAttributeIconSize 0
+skinparam class {
+    BackgroundColor #EFF6FF
+    BorderColor #2563EB
+    FontColor #0F172A
+    BackgroundColor<<struct>> #ECFDF5
+    BorderColor<<struct>> #059669
+    BackgroundColor<<modulo>> #FFF7ED
+    BorderColor<<modulo>> #EA580C
+}
+
+package "Aplica<U+00E7><U+00E3>o C++" #F1F5F9 {
+    class "Terminal\nmain.cpp" as Terminal <<modulo>> {
+        main(argc, argv) : int
+        input(prompt) : string
+        passwordInput() : string
+        parseMoney(text, value) : bool
+        currency(value) : string
+        decimalMoney(value) : string
+        today() : string
+        xmlEscape(text) : string
+        exportSpreadsheet(file, entries) : void
+        deleteHistory(database, folder, entries, terminal) : void
+    }
+
+    class Entry <<struct>> {
+        +date : std::string
+        +type : std::string
+        +description : std::string
+        +value : Money
+    }
+
+    class Supabase {
+        -writer : FILE*
+        -reader : FILE*
+        -process : HANDLE / pid_t
+        --
+        -line() : std::string
+        +Supabase(folder : filesystem::path)
+        +~Supabase()
+        {static} +json(value : string) : string
+        +request(command : string) : vector<Entry>
+        +load() : vector<Entry>
+        +add(e : Entry, allowNegative : bool) : void
+        +clear() : void
+    }
+}
+
+package "Integra<U+00E7><U+00E3>o PowerShell" #FFF7ED {
+    class "Auxiliar\nsupabase.ps1" as Auxiliar <<modulo>> {
+        Initialize-Supabase()
+        Connect-Supabase()
+        Invoke-SupabaseHttp(path, body, Authenticated)
+        Invoke-SupabaseRpc(name, body)
+        ConvertTo-LegacyQuoted(value)
+    }
+}
+
+class "Servidor Supabase" as Servidor <<servi<U+00E7>o externo>> #F3E8FF {
+    Authentication
+    --
+    finance_load()
+    finance_add(p_type, p_description, p_value, p_allow_negative)
+    finance_clear()
+}
+
+Terminal ..> Supabase : instancia e chama
+Terminal ..> Entry : mant<U+00E9>m hist<U+00F3>rico em mem<U+00F3>ria\ne gera relat<U+00F3>rios
+Supabase ..> Entry : recebe e retorna
+Supabase ..> Auxiliar : processo filho e pipes\nLOAD / ADD / DELETE / QUIT
+Auxiliar ..> Servidor : HTTPS\nautentica<U+00E7><U+00E3>o e RPC
+
+note bottom of Entry
+  Money = std::int64_t (centavos)
+  type = ENTRADA ou SAIDA
+  Saldo calculado a partir do hist<U+00F3>rico.
+end note
+
+legend bottom
+  |= Cor |= Representa<U+00E7><U+00E3>o |
+  | <#EFF6FF> Azul | Classe C++ |
+  | <#ECFDF5> Verde | Estrutura de dados |
+  | <#FFF7ED> Laranja | M<U+00F3>dulo com fun<U+00E7><U+00F5>es livres, n<U+00E3>o uma classe implementada |
+  | <#F3E8FF> Roxo | Servi<U+00E7>o externo (contratos usados pelo cliente) |
+  As defini<U+00E7><U+00F5>es SQL do servidor n<U+00E3>o est<U+00E3>o neste reposit<U+00F3>rio.
+endlegend
+@enduml

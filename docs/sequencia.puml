@@ -1,0 +1,114 @@
+@startuml
+title Doc'<U+00EA> Hamburgueria\nRegistro de entrada ou sa<U+00ED>da
+skinparam backgroundColor #F8FAFC
+skinparam shadowing false
+skinparam roundcorner 10
+skinparam defaultFontName SansSerif
+skinparam sequence {
+    ArrowColor #475569
+    LifeLineBorderColor #94A3B8
+    ParticipantBorderColor #2563EB
+    ParticipantBackgroundColor #EFF6FF
+    ActorBorderColor #0F172A
+    GroupBorderColor #94A3B8
+    GroupBackgroundColor #F1F5F9
+}
+hide footbox
+autonumber
+
+actor "Usu<U+00E1>rio" as Usuario
+box "Aplica<U+00E7><U+00E3>o local" #EFF6FF
+    participant "Terminal\nmain.cpp" as App
+    participant "Supabase\nC++" as Cliente
+    participant "Auxiliar\nsupabase.ps1" as PS #FFF7ED
+end box
+box "Servidor remoto" #F3E8FF
+    participant "Supabase Auth" as Auth #F3E8FF
+    participant "Supabase RPC" as RPC #F3E8FF
+end box
+
+== Inicializa<U+00E7><U+00E3>o e consulta ==
+Usuario -> App : Iniciar programa
+opt Senha ausente do ambiente e terminal interativo
+    App -> Usuario : Solicitar senha sem exibi-la
+    Usuario --> App : Senha
+end
+App -> Cliente : Supabase(executableFolder)
+Cliente -> PS : Iniciar processo com pipes
+PS -> PS : Initialize-Supabase()
+note right of PS
+  Carrega configura<U+00E7><U+00E3>o do ambiente e .env.
+  Vari<U+00E1>veis do ambiente t<U+00EA>m prioridade.
+end note
+App -> Cliente : load()
+Cliente -> PS : LOAD
+PS -> PS : Invoke-SupabaseRpc("finance_load")
+PS -> Auth : POST /auth/v1/token?grant_type=password
+Auth --> PS : Sess<U+00E3>o e tokens
+PS -> RPC : POST /rest/v1/rpc/finance_load + Bearer
+RPC --> PS : Hist<U+00F3>rico (entries)
+PS --> Cliente : OK N + N movimenta<U+00E7><U+00F5>es
+Cliente --> App : vector<Entry>
+App -> App : Calcular entradas, sa<U+00ED>das e saldo
+App --> Usuario : Mostrar resumo e menu
+
+== Cadastro e confirma<U+00E7><U+00F5>es ==
+Usuario -> App : Escolher entrada/sa<U+00ED>da e informar descri<U+00E7><U+00E3>o e valor
+App -> App : Validar descri<U+00E7><U+00E3>o, valor e limites
+break Descri<U+00E7><U+00E3>o vazia ou dados inv<U+00E1>lidos
+    App --> Usuario : Cancelar ou informar valida<U+00E7><U+00E3>o; voltar ao menu
+end
+opt Sa<U+00ED>da superior ao saldo consultado
+    App -> Usuario : Confirmar saldo negativo? (s/n)
+    Usuario --> App : Resposta
+    break Resposta diferente de s
+        App --> Usuario : Voltar ao menu sem grava<U+00E7><U+00E3>o
+    end
+    App -> App : allowNegative = true
+end
+App -> Usuario : Confirmar valor? (s/n)
+Usuario --> App : Resposta
+break Resposta diferente de s
+    App --> Usuario : Voltar ao menu sem grava<U+00E7><U+00E3>o
+end
+
+== Grava<U+00E7><U+00E3>o remota ==
+App -> Cliente : add(Entry, allowNegative)
+Cliente -> PS : ADD + JSON
+note over Cliente, PS
+  Envia tipo, descri<U+00E7><U+00E3>o, valor em centavos
+  e autoriza<U+00E7><U+00E3>o de saldo negativo.
+  Entry.date n<U+00E3>o <U+00E9> enviado no ADD.
+end note
+PS -> PS : Invoke-SupabaseRpc("finance_add", par<U+00E2>metros)
+opt Sess<U+00E3>o atingiu prazo de renova<U+00E7><U+00E3>o
+    PS -> Auth : POST /auth/v1/token?grant_type=refresh_token
+    Auth --> PS : Sess<U+00E3>o renovada
+end
+PS -> RPC : POST /rest/v1/rpc/finance_add + Bearer
+alt Grava<U+00E7><U+00E3>o conclu<U+00ED>da
+    RPC --> PS : Sucesso
+    PS --> Cliente : OK 0
+    Cliente --> App : add() conclu<U+00ED>do
+    App --> Usuario : Movimenta<U+00E7><U+00E3>o salva!
+    Usuario -> App : Enter para continuar
+    App -> Cliente : load() na pr<U+00F3>xima itera<U+00E7><U+00E3>o
+    Cliente -> PS : LOAD
+    PS -> RPC : finance_load com sess<U+00E3>o v<U+00E1>lida
+    RPC --> PS : Hist<U+00F3>rico atualizado
+    PS --> Cliente : OK N + movimenta<U+00E7><U+00F5>es
+    Cliente --> App : vector<Entry> atualizado
+    App --> Usuario : Resumo e menu atualizados
+else Erro retornado pela RPC
+    RPC --> PS : Erro
+    PS --> Cliente : ERROR mensagem
+    Cliente --> App : runtime_error
+    App --> Usuario : Informar erro e encerrar (c<U+00F3>digo 1)
+end
+
+legend bottom
+  Autentica<U+00E7><U+00E3>o ocorre na primeira RPC; a sess<U+00E3>o <U+00E9> verificada antes de cada RPC.
+  Falhas de autentica<U+00E7><U+00E3>o ou comunica<U+00E7><U+00E3>o tamb<U+00E9>m encerram o programa.
+  Uma resposta perdida pode ocorrer ap<U+00F3>s a grava<U+00E7><U+00E3>o: consultar o extrato antes de repetir.
+endlegend
+@enduml
